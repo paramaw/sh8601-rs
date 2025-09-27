@@ -61,27 +61,33 @@ impl ControllerInterface for Ws18AmoledDriver {
         let ramwr_addr_val = (CMD_RAMWR as u32) << 8;
         let ramwrc_addr_val = (CMD_RAMWRC as u32) << 8;
 
-        let mut chunks = pixels.chunks(DMA_CHUNK_SIZE).enumerate();
+        let mut chunks = pixels.chunks(DMA_CHUNK_SIZE);
 
-        while let Some((index, chunk)) = chunks.next() {
-            if index == 0 {
-                self.qspi.half_duplex_write(
-                    DataMode::Quad,
-                    Command::_8Bit(QSPI_PIXEL_OPCODE as u16, DataMode::Single),
-                    Address::_24Bit(ramwr_addr_val, DataMode::Single),
-                    0,
-                    chunk,
-                )?;
-            } else {
-                self.qspi.half_duplex_write(
-                    DataMode::Quad,
-                    Command::_8Bit(QSPI_PIXEL_OPCODE as u16, DataMode::Single),
-                    Address::_24Bit(ramwrc_addr_val, DataMode::Single),
-                    0,
-                    chunk,
-                )?;
-            }
+        // Send the first chunk with CMD_RAMWR
+        if let Some(first_chunk) = chunks.next() {
+            self.qspi.half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(QSPI_PIXEL_OPCODE as u16, DataMode::Single),
+                Address::_24Bit(ramwr_addr_val, DataMode::Single),
+                0,
+                first_chunk,
+            )?;
+        } else {
+            // No pixels to send, so we're done.
+            return Ok(());
         }
+
+        // Send all subsequent chunks with CMD_RAMWRC
+        for chunk in chunks {
+            self.qspi.half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(QSPI_PIXEL_OPCODE as u16, DataMode::Single),
+                Address::_24Bit(ramwrc_addr_val, DataMode::Single),
+                0,
+                chunk,
+            )?;
+        }
+
         Ok(())
     }
 }
