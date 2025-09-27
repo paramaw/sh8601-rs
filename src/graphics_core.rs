@@ -73,6 +73,37 @@ where
 
         Ok(())
     }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let drawable_area = area.intersection(&self.bounding_box());
+
+        if !drawable_area.is_zero_sized() {
+            let r = (color.into_storage() >> 16) as u8;
+            let g = (color.into_storage() >> 8) as u8;
+            let b = color.into_storage() as u8;
+
+            let bottom_right = drawable_area.bottom_right().unwrap();
+
+            for y in drawable_area.top_left.y..=bottom_right.y {
+                let start_x = drawable_area.top_left.x as u32;
+                let end_x = bottom_right.x as u32;
+                let width = self.config.width as u32;
+
+                let start_index = ((y as u32 * width + start_x) * 3) as usize;
+                let end_index = ((y as u32 * width + end_x) * 3) as usize;
+
+                if let Some(row_buffer) = self.framebuffer.get_mut(start_index..end_index) {
+                    for chunk in row_buffer.chunks_exact_mut(3) {
+                        chunk[0] = r;
+                        chunk[1] = g;
+                        chunk[2] = b;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // =========== embedded-graphics OriginDimensions Implementation ===========
