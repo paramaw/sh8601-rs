@@ -1,5 +1,5 @@
 use crate::{ControllerInterface, DrawTarget, ResetInterface, Sh8601Driver};
-use embedded_graphics_core::{pixelcolor::Rgb888, prelude::*};
+use embedded_graphics_core::{pixelcolor::Rgb888, prelude::*, primitives::Rectangle};
 
 impl<IFACE, RST> DrawTarget for Sh8601Driver<IFACE, RST>
 where
@@ -37,6 +37,40 @@ where
                 }
             }
         }
+        Ok(())
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let drawable_area = area.intersection(&self.bounding_box());
+
+        if !drawable_area.is_zero_sized() {
+            let mut colors = colors.into_iter();
+            // bottom_right is inclusive, so we use ..= to include it in the range.
+            // unwrap is safe because we've already checked that the area is not zero-sized.
+            let bottom_right = drawable_area.bottom_right().unwrap();
+
+            for y in drawable_area.top_left.y..=bottom_right.y {
+                let start_x = drawable_area.top_left.x as u32;
+                let end_x = bottom_right.x as u32;
+                let width = self.config.width as u32;
+
+                let start_index = ((y as u32 * width + start_x) * 3) as usize;
+                let end_index = ((y as u32 * width + end_x) * 3) as usize;
+
+                if let Some(row_buffer) = self.framebuffer.get_mut(start_index..end_index) {
+                    for (chunk, color) in row_buffer.chunks_exact_mut(3).zip(&mut colors) {
+                        let color_bits = color.into_storage();
+                        chunk[0] = (color_bits >> 16) as u8;
+                        chunk[1] = (color_bits >> 8) as u8;
+                        chunk[2] = color_bits as u8;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
