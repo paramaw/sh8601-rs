@@ -104,6 +104,20 @@ where
 
         Ok(())
     }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+        let r = (color.into_storage() >> 16) as u8;
+        let g = (color.into_storage() >> 8) as u8;
+        let b = color.into_storage() as u8;
+
+        for chunk in self.framebuffer.chunks_exact_mut(3) {
+            chunk[0] = r;
+            chunk[1] = g;
+            chunk[2] = b;
+        }
+
+        Ok(())
+    }
 }
 
 // =========== embedded-graphics OriginDimensions Implementation ===========
