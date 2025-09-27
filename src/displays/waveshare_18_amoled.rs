@@ -32,16 +32,7 @@ impl ControllerInterface for Ws18AmoledDriver {
     type Error = SpiError;
 
     fn send_command(&mut self, cmd: u8) -> Result<(), Self::Error> {
-        let address_value = (cmd as u32) << 8;
-
-        self.qspi.half_duplex_write(
-            DataMode::Single,
-            Command::_8Bit(QSPI_CONTROL_OPCODE as u16, DataMode::Single),
-            Address::_24Bit(address_value, DataMode::Single),
-            0,
-            &[],
-        )?;
-        Ok(())
+        self.send_command_with_data(cmd, &[])
     }
 
     fn send_command_with_data(&mut self, cmd: u8, data: &[u8]) -> Result<(), Self::Error> {
