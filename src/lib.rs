@@ -55,6 +55,9 @@ mod graphics_core;
 #[cfg(feature = "async")]
 mod graphics_core_async;
 
+#[cfg(feature = "async")]
+pub use graphics_core_async::ExternalFramebuffer;
+
 use alloc::boxed::Box;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_hal::delay::DelayNs;
@@ -795,6 +798,27 @@ where
             .await
             .map_err(DriverError::InterfaceError)?;
         Ok(())
+    }
+
+    /// Writes the contents of an external framebuffer to the display RAM.
+    /// This is useful for double buffering where you manage your own buffers.
+    pub async fn flush_external(&mut self, buffer: &[u8]) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.set_window(0, 0, self.config.width - 1, self.config.height - 1).await?;
+        self.interface
+            .send_pixels(buffer)
+            .await
+            .map_err(DriverError::InterfaceError)?;
+        Ok(())
+    }
+
+    /// Get a reference to the internal framebuffer for copying to external buffers
+    pub fn framebuffer(&self) -> &[u8] {
+        &self.framebuffer
+    }
+
+    /// Get a mutable reference to the internal framebuffer for copying from external buffers
+    pub fn framebuffer_mut(&mut self) -> &mut [u8] {
+        &mut self.framebuffer
     }
 
     pub async fn partial_flush(
