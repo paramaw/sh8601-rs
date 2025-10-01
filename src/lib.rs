@@ -564,7 +564,7 @@ where
 {
     interface: IFACE,
     reset: RST,
-    framebuffer: Framebuffer,
+    framebuffer: Option<Framebuffer>,
     config: DisplaySize,
 }
 
@@ -589,7 +589,7 @@ where
         let mut driver = Self {
             interface,
             reset,
-            framebuffer: Framebuffer::Static(&mut framebuffer[..]),
+            framebuffer: Some(Framebuffer::Static(&mut framebuffer[..])),
             config,
         };
         driver.hard_reset().await?;
@@ -611,7 +611,31 @@ where
         let mut driver = Self {
             interface,
             reset,
-            framebuffer: Framebuffer::Heap(Box::new([0u8; N])),
+            framebuffer: Some(Framebuffer::Heap(Box::new([0u8; N]))),
+            config,
+        };
+        driver.hard_reset().await?;
+        driver.initialize_display(&mut delay, color).await?;
+        Ok(driver)
+    }
+
+    /// Creates a new async driver instance WITHOUT an internal framebuffer.
+    /// Use this for double buffering where you manage your own external buffers.
+    /// You must use ExternalFramebuffer for rendering and flush_external() for display updates.
+    pub async fn new_external<DELAY>(
+        interface: IFACE,
+        reset: RST,
+        color: ColorMode,
+        config: DisplaySize,
+        mut delay: DELAY,
+    ) -> Result<Self, DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        let mut driver = Self {
+            interface,
+            reset,
+            framebuffer: None,
             config,
         };
         driver.hard_reset().await?;
@@ -791,10 +815,19 @@ where
     }
 
     /// Writes the contents of the framebuffer to the display RAM.
+    /// Returns an error if no internal framebuffer exists (use flush_external instead).
     pub async fn flush(&mut self) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        // Check framebuffer exists first
+        if self.framebuffer.is_none() {
+            return Err(DriverError::InvalidConfiguration("No internal framebuffer - use flush_external"));
+        }
+        
         self.set_window(0, 0, self.config.width - 1, self.config.height - 1).await?;
+        
+        // Now borrow the framebuffer
+        let framebuffer = self.framebuffer.as_ref().unwrap();
         self.interface
-            .send_pixels(&self.framebuffer)
+            .send_pixels(framebuffer.as_slice())
             .await
             .map_err(DriverError::InterfaceError)?;
         Ok(())
@@ -811,14 +844,16 @@ where
         Ok(())
     }
 
-    /// Get a reference to the internal framebuffer for copying to external buffers
-    pub fn framebuffer(&self) -> &[u8] {
-        &self.framebuffer
+    /// Get a reference to the internal framebuffer for copying to external buffers.
+    /// Returns None if the driver was created with new_external().
+    pub fn framebuffer(&self) -> Option<&[u8]> {
+        self.framebuffer.as_ref().map(|fb| fb.as_slice())
     }
 
-    /// Get a mutable reference to the internal framebuffer for copying from external buffers
-    pub fn framebuffer_mut(&mut self) -> &mut [u8] {
-        &mut self.framebuffer
+    /// Get a mutable reference to the internal framebuffer for copying from external buffers.
+    /// Returns None if the driver was created with new_external().
+    pub fn framebuffer_mut(&mut self) -> Option<&mut [u8]> {
+        self.framebuffer.as_mut().map(|fb| fb.as_mut_slice())
     }
 
     pub async fn partial_flush(
@@ -829,7 +864,14 @@ where
         y_end: u16,
         color: ColorMode,
     ) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        // Check framebuffer exists first
+        if self.framebuffer.is_none() {
+            return Err(DriverError::InvalidConfiguration("No internal framebuffer - use flush_external"));
+        }
+        
         self.set_window(x_start, y_start, x_end, y_end).await?;
+        
+        let framebuffer_slice = self.framebuffer.as_ref().unwrap().as_slice();
         let bytes_per_pixel = color.bytes_per_pixel();
         let fb_width = self.config.width as usize * bytes_per_pixel;
         let width = (x_end - x_start + 1) as usize;
@@ -839,8 +881,8 @@ where
         for y in 0..height {
             let offset = (y_start as usize + y) * fb_width + (x_start as usize * bytes_per_pixel);
             let row_end = offset + (width * bytes_per_pixel);
-            if offset < self.framebuffer.len() && row_end <= self.framebuffer.len() {
-                pixel_data.extend_from_slice(&self.framebuffer[offset..row_end]);
+            if offset < framebuffer_slice.len() && row_end <= framebuffer_slice.len() {
+                pixel_data.extend_from_slice(&framebuffer_slice[offset..row_end]);
             } else {
                 return Err(DriverError::InvalidConfiguration(
                     "Framebuffer slice out of bounds",
