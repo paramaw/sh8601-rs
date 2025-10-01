@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 embedded-hal = "1.0.0"
+embedded-hal-async = { version = "1.0.0", optional = true }
 embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 document-features = "0.2.11"
@@ -40,9 +41,15 @@ esp-println = { version = "0.15.0", optional = true, features = [
 esp-bootloader-esp-idf = { version = "0.2.0", optional = true, features = [
   "esp32s3",
 ] }
+embassy-time = { version = "0.5.0", optional = true }
+embassy-executor = { version = "0.7.0", optional = true }
+esp-hal-embassy = { version = "0.9.0", optional = true }
 
 
 [features]
+## Enable async support for the driver
+async = ["dep:embedded-hal-async"]
+
 ## Enable support for the Waveshare 1.8" AMOLED display
 waveshare_18_amoled = [
   "dep:esp-alloc",
@@ -52,6 +59,16 @@ waveshare_18_amoled = [
   "dep:critical-section",
   "dep:esp-bootloader-esp-idf",
   "esp-println/auto",
+]
+
+## Enable async support for the Waveshare 1.8" AMOLED display
+waveshare_18_amoled_async = [
+  "waveshare_18_amoled",
+  "async",
+  "dep:embassy-time",
+  "dep:embassy-executor",
+  "dep:esp-hal-embassy",
+  "esp-hal-embassy?/esp32s3",
 ]
 
 [profile.dev]

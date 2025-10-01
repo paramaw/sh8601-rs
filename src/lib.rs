@@ -45,13 +45,22 @@ pub mod displays;
 #[cfg(feature = "waveshare_18_amoled")]
 pub use displays::waveshare_18_amoled::*;
 
+#[cfg(feature = "waveshare_18_amoled_async")]
+pub use displays::waveshare_18_amoled_async::*;
+
 extern crate alloc;
 
 mod graphics_core;
 
+#[cfg(feature = "async")]
+mod graphics_core_async;
+
 use alloc::boxed::Box;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_hal::delay::DelayNs;
+
+#[cfg(feature = "async")]
+use embedded_hal_async::delay::DelayNs as AsyncDelayNs;
 
 /// Configuration for the display dimensions.
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +105,22 @@ pub trait ControllerInterface {
     // fn read_data(&mut self, cmd: u8, buffer: &mut [u8], read_length: u8) -> Result<(), Self::Error>;
 }
 
+/// Async trait to implement the SH8601 controller communication interface (QSPI, SPI, etc.).
+#[cfg(feature = "async")]
+pub trait ControllerInterfaceAsync {
+    /// The specific error type for this interface implementation.
+    type Error;
+
+    /// Sends a command byte to the display.
+    async fn send_command(&mut self, cmd: u8) -> Result<(), Self::Error>;
+
+    /// Sends data bytes to the display following a command.
+    async fn send_command_with_data(&mut self, cmd: u8, data: &[u8]) -> Result<(), Self::Error>;
+
+    /// Sends pixel data
+    async fn send_pixels(&mut self, pixels: &[u8]) -> Result<(), Self::Error>;
+}
+
 /// Trait for controlling the SH8601 hardware reset pin.
 pub trait ResetInterface {
     /// The specific error type for this reset implementation.
@@ -105,6 +130,18 @@ pub trait ResetInterface {
     /// This could be a GPIO port or an I2C expander-controlled pin.
     /// Implmentation should clear the reset line and wait for 20 ms then set the line high and wait for 150 ms.
     fn reset(&mut self) -> Result<(), Self::Error>;
+}
+
+/// Async trait for controlling the SH8601 hardware reset pin.
+#[cfg(feature = "async")]
+pub trait ResetInterfaceAsync {
+    /// The specific error type for this reset implementation.
+    type Error;
+
+    /// Performs the hardware reset sequence according to the SH8601 datasheet definition.
+    /// This could be a GPIO port or an I2C expander-controlled pin.
+    /// Implementation should clear the reset line and wait for 20 ms then set the line high and wait for 150 ms.
+    async fn reset(&mut self) -> Result<(), Self::Error>;
 }
 
 /// SH8601 Command Set
@@ -504,6 +541,290 @@ where
 
         self.interface
             .send_pixels(&pixel_data)
+            .map_err(DriverError::InterfaceError)?;
+        Ok(())
+    }
+}
+
+// =========== Async Driver Implementation ===========
+
+/// Main Async Driver for the SH8601 display controller.
+///
+/// Generic over the display interface (`IFACE`) and reset pin (`RST`).
+#[cfg(feature = "async")]
+pub struct Sh8601DriverAsync<IFACE, RST>
+where
+    IFACE: ControllerInterfaceAsync,
+    RST: ResetInterfaceAsync,
+{
+    interface: IFACE,
+    reset: RST,
+    framebuffer: Framebuffer,
+    config: DisplaySize,
+}
+
+#[cfg(feature = "async")]
+impl<IFACE, RST> Sh8601DriverAsync<IFACE, RST>
+where
+    IFACE: ControllerInterfaceAsync,
+    RST: ResetInterfaceAsync,
+{
+    /// Creates a new async driver instance with static array and initializes the display.
+    pub async fn new_static<DELAY, const N: usize>(
+        interface: IFACE,
+        reset: RST,
+        color: ColorMode,
+        config: DisplaySize,
+        mut delay: DELAY,
+        framebuffer: &'static mut [u8; N],
+    ) -> Result<Self, DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        let mut driver = Self {
+            interface,
+            reset,
+            framebuffer: Framebuffer::Static(&mut framebuffer[..]),
+            config,
+        };
+        driver.hard_reset().await?;
+        driver.initialize_display(&mut delay, color).await?;
+        Ok(driver)
+    }
+
+    /// Creates a new async driver instance with a boxed array framebuffer.
+    pub async fn new_heap<DELAY, const N: usize>(
+        interface: IFACE,
+        reset: RST,
+        color: ColorMode,
+        config: DisplaySize,
+        mut delay: DELAY,
+    ) -> Result<Self, DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        let mut driver = Self {
+            interface,
+            reset,
+            framebuffer: Framebuffer::Heap(Box::new([0u8; N])),
+            config,
+        };
+        driver.hard_reset().await?;
+        driver.initialize_display(&mut delay, color).await?;
+        Ok(driver)
+    }
+
+    /// Performs a hardware reset using the provided `ResetPin` implementation.
+    pub async fn hard_reset(&mut self) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.reset.reset().await.map_err(DriverError::ResetError)?;
+        Ok(())
+    }
+
+    /// Sends the essential initialization command sequence to the display.
+    pub async fn initialize_display<DELAY>(
+        &mut self,
+        delay: &mut DELAY,
+        color: ColorMode,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        self.send_command(commands::SWRESET).await?;
+        delay.delay_ms(10).await;
+        self.send_command(commands::SLPOUT).await?;
+        delay.delay_ms(120).await;
+        match color {
+            ColorMode::Rgb565 => {
+                self.send_command_with_data(commands::COLMOD, &[0x55]).await?;
+            }
+            ColorMode::Rgb888 => {
+                self.send_command_with_data(commands::COLMOD, &[0x77]).await?;
+            }
+            ColorMode::Rgb666 => {
+                self.send_command_with_data(commands::COLMOD, &[0x66]).await?;
+            }
+            ColorMode::Gray8 => {
+                self.send_command_with_data(commands::COLMOD, &[0x11]).await?;
+            }
+        }
+        delay.delay_ms(5).await;
+        self.send_command_with_data(commands::MADCTL, &[0x00]).await?;
+        self.send_command_with_data(commands::TESCAN, &[0x01, 0xC5]).await?;
+        self.send_command_with_data(commands::TEON, &[0x00]).await?;
+
+        self.send_command(commands::DISPON).await?;
+        delay.delay_ms(120).await;
+
+        self.send_command_with_data(commands::PTLAR, &[0x00, 0x80, 0x00, 0x02]).await?;
+        delay.delay_ms(10).await;
+
+        Ok(())
+    }
+
+    /// Send a command with no data
+    async fn send_command(&mut self, cmd: u8) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.interface
+            .send_command(cmd)
+            .await
+            .map_err(DriverError::InterfaceError)
+    }
+
+    /// Helper to send a command with associated data parameters
+    async fn send_command_with_data(
+        &mut self,
+        cmd: u8,
+        data: &[u8],
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.interface
+            .send_command_with_data(cmd, data)
+            .await
+            .map_err(DriverError::InterfaceError)?;
+        Ok(())
+    }
+
+    /// Sleep Mode In (SLPIN)
+    pub async fn sleep_in<DELAY>(
+        &mut self,
+        delay: &mut DELAY,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        self.send_command(commands::SLPIN).await?;
+        delay.delay_ms(5).await;
+        Ok(())
+    }
+
+    /// SH8601 Sleep Out (SLPOUT)
+    pub async fn sleep_out<DELAY>(
+        &mut self,
+        delay: &mut DELAY,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>>
+    where
+        DELAY: AsyncDelayNs,
+    {
+        self.send_command(commands::SLPOUT).await?;
+        delay.delay_ms(5).await;
+        Ok(())
+    }
+
+    /// Turns the display panel off
+    pub async fn display_off(&mut self) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.send_command(commands::DISPOFF).await
+    }
+
+    /// Turns the display panel on
+    pub async fn display_on(&mut self) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.send_command(commands::DISPON).await
+    }
+
+    /// Sets the active drawing window on the display RAM.
+    pub async fn set_window(
+        &mut self,
+        x_start: u16,
+        y_start: u16,
+        x_end: u16,
+        y_end: u16,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        if x_end == 0 || y_end == 0 {
+            return Err(DriverError::InvalidConfiguration(
+                "Window width/height cannot be zero",
+            ));
+        }
+        if x_start >= self.config.width || y_start >= self.config.height {
+            return Err(DriverError::InvalidConfiguration(
+                "Window start coordinates out of bounds",
+            ));
+        }
+
+        if x_end < x_start || y_end < y_start {
+            return Err(DriverError::InvalidConfiguration(
+                "Invalid window dimensions (end < start)",
+            ));
+        }
+
+        // CASET (2Ah): Column Address Set
+        self.send_command_with_data(
+            commands::CASET,
+            &[
+                (x_start >> 8) as u8,
+                (x_start & 0xFF) as u8,
+                (x_end >> 8) as u8,
+                (x_end & 0xFF) as u8,
+            ],
+        )
+        .await?;
+
+        // PASET (2Bh): Page Address Set
+        self.send_command_with_data(
+            commands::PASET,
+            &[
+                (y_start >> 8) as u8,
+                (y_start & 0xFF) as u8,
+                (y_end >> 8) as u8,
+                (y_end & 0xFF) as u8,
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Sets the Memory Data Access Control (MADCTL) register (controls orientation, color order).
+    pub async fn set_madctl(&mut self, value: u8) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.send_command_with_data(commands::MADCTL, &[value]).await
+    }
+
+    /// Sets the display brightness (0x000 - 0x3FF).
+    pub async fn set_brightness(
+        &mut self,
+        value: u16,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        let brightness = value.min(0x3FF);
+        let val_lsb = (brightness & 0xFF) as u8;
+        let val_msb = ((brightness >> 8) & 0x03) as u8;
+        self.send_command_with_data(commands::WRDISBV, &[val_lsb, val_msb]).await
+    }
+
+    /// Writes the contents of the framebuffer to the display RAM.
+    pub async fn flush(&mut self) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.set_window(0, 0, self.config.width - 1, self.config.height - 1).await?;
+        self.interface
+            .send_pixels(&self.framebuffer)
+            .await
+            .map_err(DriverError::InterfaceError)?;
+        Ok(())
+    }
+
+    pub async fn partial_flush(
+        &mut self,
+        x_start: u16,
+        x_end: u16,
+        y_start: u16,
+        y_end: u16,
+        color: ColorMode,
+    ) -> Result<(), DriverError<IFACE::Error, RST::Error>> {
+        self.set_window(x_start, y_start, x_end, y_end).await?;
+        let bytes_per_pixel = color.bytes_per_pixel();
+        let fb_width = self.config.width as usize * bytes_per_pixel;
+        let width = (x_end - x_start + 1) as usize;
+        let height = (y_end - y_start + 1) as usize;
+        let mut pixel_data = alloc::vec::Vec::with_capacity(width * height * bytes_per_pixel);
+
+        for y in 0..height {
+            let offset = (y_start as usize + y) * fb_width + (x_start as usize * bytes_per_pixel);
+            let row_end = offset + (width * bytes_per_pixel);
+            if offset < self.framebuffer.len() && row_end <= self.framebuffer.len() {
+                pixel_data.extend_from_slice(&self.framebuffer[offset..row_end]);
+            } else {
+                return Err(DriverError::InvalidConfiguration(
+                    "Framebuffer slice out of bounds",
+                ));
+            }
+        }
+
+        self.interface
+            .send_pixels(&pixel_data)
+            .await
             .map_err(DriverError::InterfaceError)?;
         Ok(())
     }
