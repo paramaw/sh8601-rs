@@ -8,7 +8,7 @@ use sh8601_rs::{
 
 use embedded_graphics::{
     mono_font::{ascii::FONT_10X20, MonoTextStyle},
-    pixelcolor::Rgb888,
+    pixelcolor::Rgb565,
     prelude::*,
     text::{Alignment, LineHeight, Text, TextStyleBuilder},
 };
@@ -84,14 +84,14 @@ async fn main(_spawner: Spawner) {
     const DISPLAY_SIZE: DisplaySize = DisplaySize::new(368, 448);
 
     // Calculate framebuffer size based on the display size and color mode
-    const FB_SIZE: usize = framebuffer_size(DISPLAY_SIZE, ColorMode::Rgb888);
+    const FB_SIZE: usize = framebuffer_size(DISPLAY_SIZE, ColorMode::Rgb565);
 
     // Instantiate and Initialize Display
     println!("Initializing SH8601 Display (Async)...");
     let display_res = Sh8601DriverAsync::new_heap::<_, FB_SIZE>(
         ws_driver,
         reset,
-        ColorMode::Rgb888,
+        ColorMode::Rgb565,
         DISPLAY_SIZE,
         Delay,
     )
@@ -110,7 +110,7 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-    let character_style = MonoTextStyle::new(&FONT_10X20, Rgb888::WHITE);
+    let character_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
     let text_style = TextStyleBuilder::new()
         .line_height(LineHeight::Pixels(300))
@@ -130,7 +130,7 @@ async fn main(_spawner: Spawner) {
         }
         
         Timer::after_millis(500).await;
-        display.clear(Rgb888::BLACK).unwrap();
+        display.clear(Rgb565::BLACK).unwrap();
     }
 
     loop {
