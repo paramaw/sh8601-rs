@@ -107,6 +107,7 @@ pub trait ControllerInterface {
 
 /// Async trait to implement the SH8601 controller communication interface (QSPI, SPI, etc.).
 #[cfg(feature = "async")]
+#[allow(async_fn_in_trait)]
 pub trait ControllerInterfaceAsync {
     /// The specific error type for this interface implementation.
     type Error;
@@ -134,6 +135,7 @@ pub trait ResetInterface {
 
 /// Async trait for controlling the SH8601 hardware reset pin.
 #[cfg(feature = "async")]
+#[allow(async_fn_in_trait)]
 pub trait ResetInterfaceAsync {
     /// The specific error type for this reset implementation.
     type Error;
